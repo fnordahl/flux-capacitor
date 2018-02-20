@@ -1,0 +1,24 @@
+#!/bin/bash
+
+if [ -z "$1" -o -z "$2" ]; then
+    echo usage: $0 FILE NETWORK >&2
+    echo >&2
+    echo "    FILE    - list of floating ips to create and associate" >&2
+    echo "    NETWORK - UUID of underlying external network" >&2
+    echo >&2
+    echo "FILE FORMAT" >&2
+    echo "id port_id floating_network_id floating_ip_address" >&2
+    echo >&2
+    exit
+fi
+LISTFILE=$1
+NETWORK=$2
+
+while read -r line; do
+    while read -r id port_id floating_network_id floating_ip_address; do
+        neutron floatingip-create \
+		--port-id=$port_id \
+		--floating-ip-address=$floating_ip_address \
+		$NETWORK
+    done <<< "$line"
+done <<< `cat $LISTFILE`

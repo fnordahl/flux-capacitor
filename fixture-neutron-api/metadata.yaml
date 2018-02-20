@@ -1,0 +1,11 @@
+name: fixture-neutron-api
+summary: Fixture deployment for testing scripts/API clients against
+maintainer: frode.nordahl@gmail.com
+description: Fixture deployment for testing scripts/API clients against
+tags:
+ - test
+series:
+ - xenial
+provides:
+ nothing:
+   interface: http

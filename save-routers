@@ -1,0 +1,21 @@
+#!/bin/sh
+
+if [ -z "$1" -o -z "$2" ]; then
+    echo usage: $0 FILE NETWORK >&2
+    echo >&2
+    echo "    FILE    - filename to save list of routers in" >&2
+    echo "    NETWORK - UUID of underlying external network" >&2
+    echo >&2
+    echo "FILE FORMAT" >&2
+    echo "id" >&2
+    echo >&2
+    exit
+fi
+
+FILE=$1
+NETWORK=$2
+
+neutron router-list --format value \
+	-c id \
+	-c external_gateway_info \
+	| grep $NETWORK |cut -f1 -d\ > $FILE

@@ -1,0 +1,18 @@
+#!/bin/sh
+
+if [ -z "$1" ]; then
+    echo usage: $0 FILE >&2
+    echo >&2
+    echo "    FILE    - list of floating ips to delete" >&2
+    echo >&2
+    echo "FILE FORMAT" >&2
+    echo "id" >&2
+    echo >&2
+    exit
+fi
+LISTFILE=$1
+
+for id in `cat $LISTFILE`
+do
+    neutron router-gateway-clear $id
+done

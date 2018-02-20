@@ -1,0 +1,24 @@
+#!/bin/sh
+
+if [ -z "$1" -o -z "$2" ]; then
+    echo usage: $0 FILE NETWORK >&2
+    echo >&2
+    echo "    FILE    - filename to save list of floating ips in" >&2
+    echo "    NETWORK - UUID of underlying external network" >&2
+    echo >&2
+    echo "FILE FORMAT" >&2
+    echo "id port_id floating_network_id floating_ip_address" >&2
+    echo >&2
+    exit
+fi
+
+FILE=$1
+NETWORK=$2
+
+neutron floatingip-list \
+	--format value \
+	-c id \
+	-c port_id \
+	-c floating_network_id \
+	-c floating_ip_address \
+	| grep $NETWORK > $FILE

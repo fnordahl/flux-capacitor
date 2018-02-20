@@ -1,0 +1,20 @@
+#!/bin/sh
+
+if [ -z "$1" -o -z "$2" ]; then
+    echo usage: $0 FILE NETWORK>&2
+    echo >&2
+    echo "    FILE    - list of floating ips to delete" >&2
+    echo "    NETWORK - UUID of underlying external network" >&2
+    echo >&2
+    echo "FILE FORMAT" >&2
+    echo "id" >&2
+    echo >&2
+    exit
+fi
+LISTFILE=$1
+NETWORK=$2
+
+for id in `cat $LISTFILE`
+do
+    neutron router-gateway-set $id $NETWORK
+done
