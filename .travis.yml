@@ -3,21 +3,16 @@ sudo: required
 dist: xenial
 language: python
 env:
- - LINT=1
- - IMAGE="ubuntu:trusty"
- - IMAGE="ubuntu:xenial"
- - IMAGE="ubuntu:artful"
  - IMAGE="images:ubuntu/bionic"
- - IMAGE="images:centos/6"
- - IMAGE="images:centos/7"
 script:
  - if [ ! -z ${LINT} ]; then echo "Hello, world!"; fi
 # setup dependencies here to save time on simpler test environments
 # wait for lxd socket to be ready after snap installation
 # sudo back to ourself to activate lxd group membership
  - if [ ! -z ${IMAGE} ]; then
-      sudo apt -y --purge remove lxd;
       sudo snap install lxd;
+      sudo sh -c 'echo PATH=/snap/bin:$PATH >> /etc/environment';
+      sudo lxd.migrate -yes;
       sudo lxd waitready;
       sudo lxd init --auto;
       sudo usermod -a -G lxd travis;
