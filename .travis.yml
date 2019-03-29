@@ -10,9 +10,10 @@ script:
 # wait for lxd socket to be ready after snap installation
 # sudo back to ourself to activate lxd group membership
  - if [ ! -z ${IMAGE} ]; then
+      sudo apt remove -y --purge lxd lxd-client
       sudo snap install lxd;
       sudo sh -c 'echo PATH=/snap/bin:$PATH >> /etc/environment';
-      sudo lxd.migrate -yes;
+      while [ ! -S /var/snap/lxd/common/lxd/unix.socket ]; do echo "Waiting for LXD socket...";sleep 0.2;done;
       sudo lxd waitready;
       sudo lxd init --auto;
       sudo usermod -a -G lxd travis;
