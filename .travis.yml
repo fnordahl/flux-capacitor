@@ -12,6 +12,7 @@ script:
  - if [ ! -z ${IMAGE} ]; then
       sudo apt remove -y --purge lxd lxd-client;
       sudo snap install lxd;
+      sudo snap install juju --classic
       sudo sh -c 'echo PATH=/snap/bin:$PATH >> /etc/environment';
       sudo lxd waitready;
       sudo usermod -a -G lxd travis;
@@ -26,4 +27,7 @@ script:
       sudo su travis -c 'lxc launch ${IMAGE} mymachinecontainer';
       sudo su travis -c 'lxc exec mymachinecontainer -- sh -c "lsb_release -a || cat /etc/redhat-release"';
       sudo su travis -c 'lxc exec mymachinecontainer -- sh -c "ip a"';
+      sudo su travis -c 'juju bootstrap --debug --no-gui localhost';
+      sudo su travis -c 'juju deploy ubuntu';
+      while true; do juju status;sleep 1;done;
    fi
