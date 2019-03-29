@@ -10,11 +10,11 @@ script:
 # wait for lxd socket to be ready after snap installation
 # sudo back to ourself to activate lxd group membership
  - if [ ! -z ${IMAGE} ]; then
-      sudo apt remove -y --purge lxd lxd-client;
       sudo snap install lxd;
       sudo snap install juju --classic;
       sudo sh -c 'echo PATH=/snap/bin:$PATH >> /etc/environment';
       sudo lxd waitready;
+      sudo lxd.migrate -yes;
       sudo usermod -a -G lxd travis;
       sudo su travis -c 'lxc network list';
       sudo su travis -c 'lxc network show lxdbr0';
