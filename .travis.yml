@@ -14,7 +14,12 @@ script:
       sudo snap install lxd;
       sudo sh -c 'echo PATH=/snap/bin:$PATH >> /etc/environment';
       sudo lxd waitready;
+      sudo su travis -c 'lxc network list';
+      sudo su travis -c 'lxc network show lxdbr0';
+      sudo ip a;
       sudo lxd init --auto;
+      sudo su travis -c 'lxc network list';
+      sudo su travis -c 'lxc network show lxdbr0';
       sudo usermod -a -G lxd travis;
    fi
  - if [ ! -z ${IMAGE} ]; then
