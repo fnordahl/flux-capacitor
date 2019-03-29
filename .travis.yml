@@ -13,14 +13,12 @@ script:
       sudo apt remove -y --purge lxd lxd-client;
       sudo snap install lxd;
       sudo sh -c 'echo PATH=/snap/bin:$PATH >> /etc/environment';
-      while [ ! -S /var/snap/lxd/common/lxd/unix.socket ]; do echo "Waiting for LXD socket...";sleep 0.2;done;
       sudo lxd waitready;
       sudo lxd init --auto;
       sudo usermod -a -G lxd travis;
-      sudo su travis -c 'lxc network create lxdbr0';
-      sudo su travis -c 'lxc network attach-profile lxdbr0 default eth0';
    fi
  - if [ ! -z ${IMAGE} ]; then
       sudo su travis -c 'lxc launch ${IMAGE} mymachinecontainer';
       sudo su travis -c 'lxc exec mymachinecontainer -- sh -c "lsb_release -a || cat /etc/redhat-release"';
+      sudo su travis -c 'lxc exec mymachinecontainer -- sh -c "ip a"';
    fi
