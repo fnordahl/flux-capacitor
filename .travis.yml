@@ -13,6 +13,8 @@ comment: |
   sudo back to ourself to activate lxd group membership executable search path
 script:
   - if [ $ENV = 'func' ]; then
+      sudo apt update;
+      sudo apt install -y distro-info;
       sudo apt remove -y --purge lxd lxd-client;
       sudo snap install lxd;
       sudo snap install juju --classic;
@@ -20,7 +22,7 @@ script:
       sudo lxd waitready;
       sudo lxd init --auto;
       sudo usermod -a -G lxd travis;
-      sudo su - travis -c 'juju bootstrap --no-gui localhost';
+      sudo su - travis -c 'juju bootstrap --no-gui --show-log localhost';
     fi
   - echo "export PATH=$PATH;cd $(pwd)" > $HOME/saved_path
   - sudo su - travis -c "source $HOME/saved_path; tox -c tox.ini -e $ENV";
@@ -29,5 +31,6 @@ script:
     fi
 after_failure:
   - if [ $ENV = 'func' ]; then
+      sudo su travis -c 'lxc list';
       sudo su travis -c 'for application in trusty xenial bionic cosmic disco; do juju ssh -m $(juju models --format yaml|grep "^- name:.*zaza"|cut -f2 -d/) minimal-${application}/0 "sudo cat /var/log/juju/unit*.log";done';
     fi
