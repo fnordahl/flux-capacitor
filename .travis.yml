@@ -1,0 +1,16 @@
+sudo: true
+dist: xenial
+language: python
+install: pip install tox-travis
+matrix:
+  include:
+    - name: "Python 3.4"
+      python: 3.4
+    - name: "Python 3.5"
+      python: 3.5
+    - name: "Python 3.6"
+      python: 3.6
+    - name: "Python 3.6"
+      python: 3.6
+script:
+  - python --version
