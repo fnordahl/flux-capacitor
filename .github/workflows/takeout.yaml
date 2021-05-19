@@ -1,0 +1,16 @@
+name: Takeout tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: [self-hosted]
+    steps:
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          apt -y update
+          apt -y install linuxlogo
+      - name: Hello, world!
+        run: |
+          set -euxo pipefail
+          echo Hello, world!
+          linuxlogo
