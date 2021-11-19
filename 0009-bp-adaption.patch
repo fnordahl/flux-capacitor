@@ -1,0 +1,27 @@
+From 583f0b7edc81e39d67a0021a64cb1149fd8a04bf Mon Sep 17 00:00:00 2001
+From: Frode Nordahl <frode.nordahl@canonical.com>
+Date: Fri, 19 Nov 2021 11:48:58 +0000
+Subject: [PATCH 09/10] Backport adaption
+
+Signed-off-by: Frode Nordahl <frode.nordahl@canonical.com>
+
+---
+ drivers/net/netdevsim/netdevsim.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/netdevsim/netdevsim.h b/drivers/net/netdevsim/netdevsim.h
+index 6f2642cc69f0..602d0b2e6519 100644
+--- a/drivers/net/netdevsim/netdevsim.h
++++ b/drivers/net/netdevsim/netdevsim.h
+@@ -379,7 +379,7 @@ void nsim_dev_port_function_exit(struct nsim_dev *nsim_dev);
+ void nsim_dev_port_function_enable(struct nsim_dev *nsim_dev);
+ void nsim_dev_port_function_disable(struct nsim_dev *nsim_dev);
+ int nsim_dev_devlink_port_new(struct devlink *devlink, const struct devlink_port_new_attrs *attrs,
+-			      struct netlink_ext_ack *extack);
++			      struct netlink_ext_ack *extack, unsigned int *);
+ int nsim_dev_devlink_port_del(struct devlink *devlink, unsigned int port_index,
+ 			      struct netlink_ext_ack *extack);
+ int nsim_dev_port_function_hw_addr_get(struct devlink *devlink, struct devlink_port *port,
+-- 
+2.25.1
+

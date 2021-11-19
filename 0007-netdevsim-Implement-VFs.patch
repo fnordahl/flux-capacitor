@@ -1,0 +1,192 @@
+Subject: [PATCH RFC net-next v2 04/18] netdevsim: Implement VFs
+From: <dlinkin@xxxxxxxxxx>
+Date: Wed, 12 May 2021 17:48:33 +0300
+Cc: <davem@xxxxxxxxxxxxx>, <kuba@xxxxxxxxxx>, <jiri@xxxxxxxxxx>, <stephen@xxxxxxxxxxxxxxxxxx>, <dsahern@xxxxxxxxx>, <vladbu@xxxxxxxxxx>, <parav@xxxxxxxxxx>, <huyn@xxxxxxxxxx>, Dmytro Linkin <dlinkin@xxxxxxxxxx>
+In-reply-to: <1620830927-11828-1-git-send-email-dlinkin@nvidia.com>
+References: <1620830927-11828-1-git-send-email-dlinkin@nvidia.com>
+
+From: Dmytro Linkin <dlinkin@xxxxxxxxxx>
+
+Allow creation of netdevsim ports for VFs along with allocations of
+corresponding net devices and devlink ports.
+Add enums and helpers to distinguish PFs' ports from VFs' ports.
+
+Ports creation/deletion debugfs API intended to be used with physical
+ports only.
+VFs instantiation will be done in one of the next patches.
+
+Signed-off-by: Dmytro Linkin <dlinkin@xxxxxxxxxx>
+Reviewed-by: Jiri Pirko <jiri@xxxxxxxxxx>
+---
+ drivers/net/netdevsim/dev.c    | 14 ++++++-
+ drivers/net/netdevsim/netdev.c | 90 ++++++++++++++++++++++++++++++------------
+ 2 files changed, 77 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/net/netdevsim/dev.c b/drivers/net/netdevsim/dev.c
+index e996e2e9c260..7e2b567e05ac 100644
+--- a/drivers/net/netdevsim/dev.c
++++ b/drivers/net/netdevsim/dev.c
+@@ -949,11 +949,15 @@ static const struct devlink_ops nsim_dev_devlink_ops = {
+ static int __nsim_dev_port_add(struct nsim_dev *nsim_dev, enum nsim_dev_port_type type,
+ 			       unsigned int port_index)
+ {
++	struct nsim_bus_dev *nsim_bus_dev = nsim_dev->nsim_bus_dev;
+ 	struct devlink_port_attrs attrs = {};
+ 	struct nsim_dev_port *nsim_dev_port;
+ 	struct devlink_port *devlink_port;
+ 	int err;
+ 
++	if (type == NSIM_DEV_PORT_TYPE_VF && !nsim_bus_dev->num_vfs)
++		return -EINVAL;
++
+ 	nsim_dev_port = kzalloc(sizeof(*nsim_dev_port), GFP_KERNEL);
+ 	if (!nsim_dev_port)
+ 		return -ENOMEM;
+@@ -961,8 +965,14 @@ static int __nsim_dev_port_add(struct nsim_dev *nsim_dev, enum nsim_dev_port_typ
+ 	nsim_dev_port->port_type = type;
+ 
+ 	devlink_port = &nsim_dev_port->devlink_port;
+-	attrs.flavour = DEVLINK_PORT_FLAVOUR_PHYSICAL;
+-	attrs.phys.port_number = port_index + 1;
++	if (nsim_dev_port_is_pf(nsim_dev_port)) {
++		attrs.flavour = DEVLINK_PORT_FLAVOUR_PHYSICAL;
++		attrs.phys.port_number = port_index + 1;
++	} else {
++		attrs.flavour = DEVLINK_PORT_FLAVOUR_PCI_VF;
++		attrs.pci_vf.pf = 0;
++		attrs.pci_vf.vf = port_index;
++	}
+ 	memcpy(attrs.switch_id.id, nsim_dev->switch_id.id, nsim_dev->switch_id.id_len);
+ 	attrs.switch_id.id_len = nsim_dev->switch_id.id_len;
+ 	devlink_port_attrs_set(devlink_port, &attrs);
+diff --git a/drivers/net/netdevsim/netdev.c b/drivers/net/netdevsim/netdev.c
+index 659d3dceb687..9352e18b4db9 100644
+--- a/drivers/net/netdevsim/netdev.c
++++ b/drivers/net/netdevsim/netdev.c
+@@ -261,6 +261,18 @@ static const struct net_device_ops nsim_netdev_ops = {
+ 	.ndo_get_devlink_port	= nsim_get_devlink_port,
+ };
+ 
++static const struct net_device_ops nsim_vf_netdev_ops = {
++	.ndo_start_xmit		= nsim_start_xmit,
++	.ndo_set_rx_mode	= nsim_set_rx_mode,
++	.ndo_set_mac_address	= eth_mac_addr,
++	.ndo_validate_addr	= eth_validate_addr,
++	.ndo_change_mtu		= nsim_change_mtu,
++	.ndo_get_stats64	= nsim_get_stats64,
++	.ndo_setup_tc		= nsim_setup_tc,
++	.ndo_set_features	= nsim_set_features,
++	.ndo_get_devlink_port	= nsim_get_devlink_port,
++};
++
+ static void nsim_setup(struct net_device *dev)
+ {
+ 	ether_setup(dev);
+@@ -280,6 +292,49 @@ static void nsim_setup(struct net_device *dev)
+ 	dev->max_mtu = ETH_MAX_MTU;
+ }
+ 
++static int nsim_init_netdevsim(struct netdevsim *ns)
++{
++	int err;
++
++	ns->netdev->netdev_ops = &nsim_netdev_ops;
++
++	err = nsim_udp_tunnels_info_create(ns->nsim_dev, ns->netdev);
++	if (err)
++		return err;
++
++	rtnl_lock();
++	err = nsim_bpf_init(ns);
++	if (err)
++		goto err_utn_destroy;
++
++	nsim_ipsec_init(ns);
++
++	err = register_netdevice(ns->netdev);
++	if (err)
++		goto err_ipsec_teardown;
++	rtnl_unlock();
++	return 0;
++
++err_ipsec_teardown:
++	nsim_ipsec_teardown(ns);
++	nsim_bpf_uninit(ns);
++err_utn_destroy:
++	rtnl_unlock();
++	nsim_udp_tunnels_info_destroy(ns->netdev);
++	return err;
++}
++
++static int nsim_init_netdevsim_vf(struct netdevsim *ns)
++{
++	int err;
++
++	ns->netdev->netdev_ops = &nsim_vf_netdev_ops;
++	rtnl_lock();
++	err = register_netdevice(ns->netdev);
++	rtnl_unlock();
++	return err;
++}
++
+ struct netdevsim *
+ nsim_create(struct nsim_dev *nsim_dev, struct nsim_dev_port *nsim_dev_port)
+ {
+@@ -299,33 +354,15 @@ nsim_create(struct nsim_dev *nsim_dev, struct nsim_dev_port *nsim_dev_port)
+ 	ns->nsim_dev_port = nsim_dev_port;
+ 	ns->nsim_bus_dev = nsim_dev->nsim_bus_dev;
+ 	SET_NETDEV_DEV(dev, &ns->nsim_bus_dev->dev);
+-	dev->netdev_ops = &nsim_netdev_ops;
+ 	nsim_ethtool_init(ns);
+-
+-	err = nsim_udp_tunnels_info_create(nsim_dev, dev);
++	if (nsim_dev_port_is_pf(nsim_dev_port))
++		err = nsim_init_netdevsim(ns);
++	else
++		err = nsim_init_netdevsim_vf(ns);
+ 	if (err)
+ 		goto err_free_netdev;
+-
+-	rtnl_lock();
+-	err = nsim_bpf_init(ns);
+-	if (err)
+-		goto err_utn_destroy;
+-
+-	nsim_ipsec_init(ns);
+-
+-	err = register_netdevice(dev);
+-	if (err)
+-		goto err_ipsec_teardown;
+-	rtnl_unlock();
+-
+ 	return ns;
+ 
+-err_ipsec_teardown:
+-	nsim_ipsec_teardown(ns);
+-	nsim_bpf_uninit(ns);
+-err_utn_destroy:
+-	rtnl_unlock();
+-	nsim_udp_tunnels_info_destroy(dev);
+ err_free_netdev:
+ 	free_netdev(dev);
+ 	return ERR_PTR(err);
+@@ -337,10 +374,13 @@ void nsim_destroy(struct netdevsim *ns)
+ 
+ 	rtnl_lock();
+ 	unregister_netdevice(dev);
+-	nsim_ipsec_teardown(ns);
+-	nsim_bpf_uninit(ns);
++	if (nsim_dev_port_is_pf(ns->nsim_dev_port)) {
++		nsim_ipsec_teardown(ns);
++		nsim_bpf_uninit(ns);
++	}
+ 	rtnl_unlock();
+-	nsim_udp_tunnels_info_destroy(dev);
++	if (nsim_dev_port_is_pf(ns->nsim_dev_port))
++		nsim_udp_tunnels_info_destroy(dev);
+ 	free_netdev(dev);
+ }
+ 
+-- 
+2.25.1
+

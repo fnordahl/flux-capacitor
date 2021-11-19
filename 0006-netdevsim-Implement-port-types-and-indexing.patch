@@ -1,0 +1,234 @@
+Subject: [PATCH RFC net-next v2 03/18] netdevsim: Implement port types and indexing
+From: <dlinkin@xxxxxxxxxx>
+Date: Wed, 12 May 2021 17:48:32 +0300
+Cc: <davem@xxxxxxxxxxxxx>, <kuba@xxxxxxxxxx>, <jiri@xxxxxxxxxx>, <stephen@xxxxxxxxxxxxxxxxxx>, <dsahern@xxxxxxxxx>, <vladbu@xxxxxxxxxx>, <parav@xxxxxxxxxx>, <huyn@xxxxxxxxxx>, Dmytro Linkin <dlinkin@xxxxxxxxxx>
+In-reply-to: <1620830927-11828-1-git-send-email-dlinkin@nvidia.com>
+References: <1620830927-11828-1-git-send-email-dlinkin@nvidia.com>
+
+From: Dmytro Linkin <dlinkin@xxxxxxxxxx>
+
+Define type of ports, which netdevsim driver currently operates with as
+PF. Define new port type - VF, which will be implemented in following
+patches. Add helper functions to distinguish them. Add helper function
+to get VF index from port index.
+
+Add port indexing logic where PFs' indexes starts from 0, VFs' - from
+NSIM_DEV_VF_PORT_INDEX_BASE.
+All ports uses same index pool, which means that PF port may be created
+with index from VFs' indexes range.
+Maximum number of VFs, which the driver can allocate, is limited by
+UINT_MAX - BASE.
+
+Signed-off-by: Dmytro Linkin <dlinkin@xxxxxxxxxx>
+Reviewed-by: Jiri Pirko <jiri@xxxxxxxxxx>
+---
+ drivers/net/netdevsim/bus.c       | 10 ++++++++--
+ drivers/net/netdevsim/dev.c       | 42 +++++++++++++++++++++++++++++----------
+ drivers/net/netdevsim/netdevsim.h | 20 +++++++++++++++++++
+ 3 files changed, 60 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/net/netdevsim/bus.c b/drivers/net/netdevsim/bus.c
+index d5c547c35e2f..e29146d9eddb 100644
+--- a/drivers/net/netdevsim/bus.c
++++ b/drivers/net/netdevsim/bus.c
+@@ -141,6 +141,12 @@ ssize_t nsim_bus_dev_max_vfs_write(struct file *file,
+ 		goto unlock;
+ 	}
+ 
++	/* max_vfs limited by the maximum number of provided port indexes */
++	if (val > NSIM_DEV_VF_PORT_INDEX_MAX - NSIM_DEV_VF_PORT_INDEX_BASE) {
++		ret = -ERANGE;
++		goto unlock;
++	}
++
+ 	vfconfigs = kcalloc(val, sizeof(struct nsim_vf_config), GFP_KERNEL | __GFP_NOWARN);
+ 	if (!vfconfigs) {
+ 		ret = -ENOMEM;
+@@ -178,7 +184,7 @@ new_port_store(struct device *dev, struct device_attribute *attr,
+ 
+ 	mutex_lock(&nsim_bus_dev->nsim_bus_reload_lock);
+ 	devlink_reload_disable(devlink);
+-	ret = nsim_dev_port_add(nsim_bus_dev, port_index);
++	ret = nsim_dev_port_add(nsim_bus_dev, NSIM_DEV_PORT_TYPE_PF, port_index);
+ 	devlink_reload_enable(devlink);
+ 	mutex_unlock(&nsim_bus_dev->nsim_bus_reload_lock);
+ 	return ret ? ret : count;
+@@ -207,7 +213,7 @@ del_port_store(struct device *dev, struct device_attribute *attr,
+ 
+ 	mutex_lock(&nsim_bus_dev->nsim_bus_reload_lock);
+ 	devlink_reload_disable(devlink);
+-	ret = nsim_dev_port_del(nsim_bus_dev, port_index);
++	ret = nsim_dev_port_del(nsim_bus_dev, NSIM_DEV_PORT_TYPE_PF, port_index);
+ 	devlink_reload_enable(devlink);
+ 	mutex_unlock(&nsim_bus_dev->nsim_bus_reload_lock);
+ 	return ret ? ret : count;
+diff --git a/drivers/net/netdevsim/dev.c b/drivers/net/netdevsim/dev.c
+index eaa7a32bc348..e996e2e9c260 100644
+--- a/drivers/net/netdevsim/dev.c
++++ b/drivers/net/netdevsim/dev.c
+@@ -35,6 +35,25 @@
+ 
+ #include "netdevsim.h"
+ 
++static unsigned int
++nsim_dev_port_index(enum nsim_dev_port_type type, unsigned int port_index)
++{
++	switch (type) {
++	case NSIM_DEV_PORT_TYPE_VF:
++		port_index = NSIM_DEV_VF_PORT_INDEX_BASE + port_index;
++		break;
++	case NSIM_DEV_PORT_TYPE_PF:
++		break;
++	}
++
++	return port_index;
++}
++
++static inline unsigned int nsim_dev_port_index_to_vf_index(unsigned int port_index)
++{
++	return port_index - NSIM_DEV_VF_PORT_INDEX_BASE;
++}
++
+ static struct dentry *nsim_dev_ddir;
+ 
+ #define NSIM_DEV_DUMMY_REGION_SIZE (1024 * 32)
+@@ -927,7 +946,7 @@ static const struct devlink_ops nsim_dev_devlink_ops = {
+ #define NSIM_DEV_MAX_MACS_DEFAULT 32
+ #define NSIM_DEV_TEST1_DEFAULT true
+ 
+-static int __nsim_dev_port_add(struct nsim_dev *nsim_dev,
++static int __nsim_dev_port_add(struct nsim_dev *nsim_dev, enum nsim_dev_port_type type,
+ 			       unsigned int port_index)
+ {
+ 	struct devlink_port_attrs attrs = {};
+@@ -938,7 +957,8 @@ static int __nsim_dev_port_add(struct nsim_dev *nsim_dev,
+ 	nsim_dev_port = kzalloc(sizeof(*nsim_dev_port), GFP_KERNEL);
+ 	if (!nsim_dev_port)
+ 		return -ENOMEM;
+-	nsim_dev_port->port_index = port_index;
++	nsim_dev_port->port_index = nsim_dev_port_index(type, port_index);
++	nsim_dev_port->port_type = type;
+ 
+ 	devlink_port = &nsim_dev_port->devlink_port;
+ 	attrs.flavour = DEVLINK_PORT_FLAVOUR_PHYSICAL;
+@@ -947,7 +967,7 @@ static int __nsim_dev_port_add(struct nsim_dev *nsim_dev,
+ 	attrs.switch_id.id_len = nsim_dev->switch_id.id_len;
+ 	devlink_port_attrs_set(devlink_port, &attrs);
+ 	err = devlink_port_register(priv_to_devlink(nsim_dev), devlink_port,
+-				    port_index);
++				    nsim_dev_port->port_index);
+ 	if (err)
+ 		goto err_port_free;
+ 
+@@ -1004,7 +1024,7 @@ static int nsim_dev_port_add_all(struct nsim_dev *nsim_dev,
+ 	int i, err;
+ 
+ 	for (i = 0; i < port_count; i++) {
+-		err = __nsim_dev_port_add(nsim_dev, i);
++		err = __nsim_dev_port_add(nsim_dev, NSIM_DEV_PORT_TYPE_PF, i);
+ 		if (err)
+ 			goto err_port_del_all;
+ 	}
+@@ -1228,32 +1248,34 @@ void nsim_dev_remove(struct nsim_bus_dev *nsim_bus_dev)
+ }
+ 
+ static struct nsim_dev_port *
+-__nsim_dev_port_lookup(struct nsim_dev *nsim_dev, unsigned int port_index)
++__nsim_dev_port_lookup(struct nsim_dev *nsim_dev, enum nsim_dev_port_type type,
++		       unsigned int port_index)
+ {
+ 	struct nsim_dev_port *nsim_dev_port;
+ 
++	port_index = nsim_dev_port_index(type, port_index);
+ 	list_for_each_entry(nsim_dev_port, &nsim_dev->port_list, list)
+ 		if (nsim_dev_port->port_index == port_index)
+ 			return nsim_dev_port;
+ 	return NULL;
+ }
+ 
+-int nsim_dev_port_add(struct nsim_bus_dev *nsim_bus_dev,
++int nsim_dev_port_add(struct nsim_bus_dev *nsim_bus_dev, enum nsim_dev_port_type type,
+ 		      unsigned int port_index)
+ {
+ 	struct nsim_dev *nsim_dev = dev_get_drvdata(&nsim_bus_dev->dev);
+ 	int err;
+ 
+ 	mutex_lock(&nsim_dev->port_list_lock);
+-	if (__nsim_dev_port_lookup(nsim_dev, port_index))
++	if (__nsim_dev_port_lookup(nsim_dev, type, port_index))
+ 		err = -EEXIST;
+ 	else
+-		err = __nsim_dev_port_add(nsim_dev, port_index);
++		err = __nsim_dev_port_add(nsim_dev, type, port_index);
+ 	mutex_unlock(&nsim_dev->port_list_lock);
+ 	return err;
+ }
+ 
+-int nsim_dev_port_del(struct nsim_bus_dev *nsim_bus_dev,
++int nsim_dev_port_del(struct nsim_bus_dev *nsim_bus_dev, enum nsim_dev_port_type type,
+ 		      unsigned int port_index)
+ {
+ 	struct nsim_dev *nsim_dev = dev_get_drvdata(&nsim_bus_dev->dev);
+@@ -1261,7 +1283,7 @@ int nsim_dev_port_del(struct nsim_bus_dev *nsim_bus_dev,
+ 	int err = 0;
+ 
+ 	mutex_lock(&nsim_dev->port_list_lock);
+-	nsim_dev_port = __nsim_dev_port_lookup(nsim_dev, port_index);
++	nsim_dev_port = __nsim_dev_port_lookup(nsim_dev, type, port_index);
+ 	if (!nsim_dev_port)
+ 		err = -ENOENT;
+ 	else
+diff --git a/drivers/net/netdevsim/netdevsim.h b/drivers/net/netdevsim/netdevsim.h
+index ff463eb5a9bd..7981bf078908 100644
+--- a/drivers/net/netdevsim/netdevsim.h
++++ b/drivers/net/netdevsim/netdevsim.h
+@@ -197,10 +197,19 @@ static inline void nsim_dev_psample_exit(struct nsim_dev *nsim_dev)
+ }
+ #endif
+ 
++enum nsim_dev_port_type {
++	NSIM_DEV_PORT_TYPE_PF,
++	NSIM_DEV_PORT_TYPE_VF,
++};
++
++#define NSIM_DEV_VF_PORT_INDEX_BASE 128
++#define NSIM_DEV_VF_PORT_INDEX_MAX UINT_MAX
++
+ struct nsim_dev_port {
+ 	struct list_head list;
+ 	struct devlink_port devlink_port;
+ 	unsigned int port_index;
++	enum nsim_dev_port_type port_type;
+ 	struct dentry *ddir;
+ 	struct netdevsim *ns;
+ };
+@@ -271,8 +280,10 @@ void nsim_dev_exit(void);
+ int nsim_dev_probe(struct nsim_bus_dev *nsim_bus_dev);
+ void nsim_dev_remove(struct nsim_bus_dev *nsim_bus_dev);
+ int nsim_dev_port_add(struct nsim_bus_dev *nsim_bus_dev,
++		      enum nsim_dev_port_type type,
+ 		      unsigned int port_index);
+ int nsim_dev_port_del(struct nsim_bus_dev *nsim_bus_dev,
++		      enum nsim_dev_port_type type,
+ 		      unsigned int port_index);
+ 
+ struct nsim_fib_data *nsim_fib_create(struct devlink *devlink,
+@@ -289,6 +300,15 @@ ssize_t nsim_bus_dev_max_vfs_write(struct file *file,
+ 				   size_t count, loff_t *ppos);
+ void nsim_bus_dev_vfs_disable(struct nsim_bus_dev *nsim_bus_dev);
+ 
++static inline bool nsim_dev_port_is_pf(struct nsim_dev_port *nsim_dev_port)
++{
++	return nsim_dev_port->port_type == NSIM_DEV_PORT_TYPE_PF;
++}
++
++static inline bool nsim_dev_port_is_vf(struct nsim_dev_port *nsim_dev_port)
++{
++	return nsim_dev_port->port_type == NSIM_DEV_PORT_TYPE_VF;
++}
+ #if IS_ENABLED(CONFIG_XFRM_OFFLOAD)
+ void nsim_ipsec_init(struct netdevsim *ns);
+ void nsim_ipsec_teardown(struct netdevsim *ns);
+-- 
+2.25.1
+

@@ -1,0 +1,43 @@
+From 1d8e2c4910105c11e0690d5fc7dec5eedd923e26 Mon Sep 17 00:00:00 2001
+From: Frode Nordahl <frode.nordahl@canonical.com>
+Date: Fri, 19 Nov 2021 11:49:22 +0000
+Subject: [PATCH 10/10] netdevsim: Allow adding port of flavour pcivf
+
+Signed-off-by: Frode Nordahl <frode.nordahl@canonical.com>
+
+---
+ drivers/net/netdevsim/port_function.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/netdevsim/port_function.c b/drivers/net/netdevsim/port_function.c
+index 50225a913a8e..f128f988ab01 100644
+--- a/drivers/net/netdevsim/port_function.c
++++ b/drivers/net/netdevsim/port_function.c
+@@ -310,11 +310,12 @@ static bool nsim_dev_port_flavour_supported(const struct nsim_dev *nsim_dev,
+ 					    const struct devlink_port_new_attrs *attrs)
+ {
+ 	return attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF ||
+-	       attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_SF;
++	       attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_SF ||
++	       attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_VF;
+ }
+ 
+ int nsim_dev_devlink_port_new(struct devlink *devlink, const struct devlink_port_new_attrs *attrs,
+-			      struct netlink_ext_ack *extack)
++			      struct netlink_ext_ack *extack, unsigned int *n __attribute__((__unused__)))
+ {
+ 	struct nsim_dev *nsim_dev = devlink_priv(devlink);
+ 	struct nsim_bus_dev *nsim_bus_dev;
+@@ -349,6 +350,9 @@ int nsim_dev_devlink_port_new(struct devlink *devlink, const struct devlink_port
+ 
+ 	if (attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF)
+ 		devlink_port_attrs_pci_pf_set(&port->dl_port, port->controller, port->pfnum, false);
++	else if (attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_VF)
++		devlink_port_attrs_pci_vf_set(&port->dl_port, port->controller, port->pfnum,
++					      port->sfnum, false);
+ 	else
+ 		devlink_port_attrs_pci_sf_set(&port->dl_port, port->controller, port->pfnum,
+ 					      port->sfnum, false);
+-- 
+2.25.1
+

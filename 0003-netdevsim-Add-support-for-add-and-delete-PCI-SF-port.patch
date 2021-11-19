@@ -1,0 +1,262 @@
+From: Parav Pandit <parav@nvidia.com>
+To: <davem@davemloft.net>, <kuba@kernel.org>, <netdev@vger.kernel.org>
+Cc: Parav Pandit <parav@nvidia.com>, Jiri Pirko <jiri@nvidia.com>
+Subject: [PATCH net-next v2 7/8] netdevsim: Simulate port function state for a PCI port
+Date: Thu, 17 Sep 2020 20:20:19 +0300	[thread overview]
+Message-ID: <20200917172020.26484-8-parav@nvidia.com> (raw)
+In-Reply-To: <20200917172020.26484-1-parav@nvidia.com>
+
+Simulate port function state of a PCI port.
+This enables users to get and set the state of the PCI port function.
+
+Example of a PCI SF port which supports a port function:
+Create a device with ID=10 and one physical port.
+$ echo "10 1" > /sys/bus/netdevsim/new_device
+
+$ devlink port add netdevsim/netdevsim10/10 flavour pcipf pfnum 0
+$ devlink port function set netdevsim/netdevsim10/10 hw_addr 00:11:22:33:44:55 state active
+
+$ devlink port show netdevsim/netdevsim10/10
+netdevsim/netdevsim10/10: type eth netdev eni10npf0 flavour pcipf controller 0 pfnum 0 external true splittable false
+  function:
+    hw_addr 00:00:00:00:00:00 state inactive
+
+$ devlink port function set netdevsim/netdevsim10/10 hw_addr 00:11:22:33:44:55 state active
+
+$ devlink port show  netdevsim/netdevsim10/10 -jp
+{
+    "port": {
+        "netdevsim/netdevsim10/10": {
+            "type": "eth",
+            "netdev": "eni10npf0",
+            "flavour": "pcipf",
+            "controller": 0,
+            "pfnum": 0,
+            "external": false,
+            "splittable": false,
+            "function": {
+                "hw_addr": "00:11:22:33:44:55",
+                "state": "active"
+            }
+        }
+    }
+}
+
+Signed-off-by: Parav Pandit <parav@nvidia.com>
+Reviewed-by: Jiri Pirko <jiri@nvidia.com>
+---
+ drivers/net/netdevsim/dev.c           |  2 ++
+ drivers/net/netdevsim/netdevsim.h     |  6 ++++++
+ drivers/net/netdevsim/port_function.c | 30 +++++++++++++++++++++++++++
+ 3 files changed, 38 insertions(+)
+
+diff --git a/drivers/net/netdevsim/netdevsim.h b/drivers/net/netdevsim/netdevsim.h
+index fe3641cdf8a4..91b866582961 100644
+--- a/drivers/net/netdevsim/netdevsim.h
++++ b/drivers/net/netdevsim/netdevsim.h
+@@ -256,6 +256,7 @@ struct nsim_dev {
+ 		struct list_head head;
+ 		struct ida ida;
+ 		struct ida pfnum_ida;
++		struct ida sfnum_ida;
+ 	} port_functions;
+ };
+ 
+diff --git a/drivers/net/netdevsim/port_function.c b/drivers/net/netdevsim/port_function.c
+index 6feeeaf19ce8..50225a913a8e 100644
+--- a/drivers/net/netdevsim/port_function.c
++++ b/drivers/net/netdevsim/port_function.c
+@@ -13,9 +13,11 @@ struct nsim_port_function {
+ 	unsigned int port_index;
+ 	enum devlink_port_flavour flavour;
+ 	u32 controller;
++	u32 sfnum;
+ 	u16 pfnum;
+ 	struct nsim_port_function *pf_port; /* Valid only for SF port */
+ 	u8 hw_addr[ETH_ALEN];
++	int refcount; /* Counts how many sf ports are bound attached to this pf port. */
+ };
+ 
+ void nsim_dev_port_function_init(struct nsim_dev *nsim_dev)
+@@ -24,10 +26,13 @@ void nsim_dev_port_function_init(struct nsim_dev *nsim_dev)
+ 	INIT_LIST_HEAD(&nsim_dev->port_functions.head);
+ 	ida_init(&nsim_dev->port_functions.ida);
+ 	ida_init(&nsim_dev->port_functions.pfnum_ida);
++	ida_init(&nsim_dev->port_functions.sfnum_ida);
+ }
+ 
+ void nsim_dev_port_function_exit(struct nsim_dev *nsim_dev)
+ {
++	WARN_ON(!ida_is_empty(&nsim_dev->port_functions.sfnum_ida));
++	ida_destroy(&nsim_dev->port_functions.sfnum_ida);
+ 	WARN_ON(!ida_is_empty(&nsim_dev->port_functions.pfnum_ida));
+ 	ida_destroy(&nsim_dev->port_functions.pfnum_ida);
+ 	WARN_ON(!ida_is_empty(&nsim_dev->port_functions.ida));
+@@ -118,9 +123,24 @@ nsim_devlink_port_function_alloc(struct nsim_dev *dev, const struct devlink_port
+ 			goto fn_ida_err;
+ 		port->pfnum = ret;
+ 		break;
++	case DEVLINK_PORT_FLAVOUR_PCI_SF:
++		if (attrs->sfnum_valid)
++			ret = ida_alloc_range(&dev->port_functions.sfnum_ida, attrs->sfnum,
++					      attrs->sfnum, GFP_KERNEL);
++		else
++			ret = ida_alloc(&dev->port_functions.sfnum_ida, GFP_KERNEL);
++		if (ret < 0)
++			goto fn_ida_err;
++		port->sfnum = ret;
++		port->pfnum = attrs->pfnum;
++		break;
+ 	default:
+ 		break;
+ 	}
++	/* refcount_t is not needed as port is protected by port_functions.mutex.
++	 * This count is to keep track of how many SF ports are attached a PF port.
++	 */
++	port->refcount = 1;
+ 	return port;
+ 
+ fn_ida_err:
+@@ -136,6 +156,9 @@ static void nsim_devlink_port_function_free(struct nsim_dev *dev, struct nsim_po
+ 	case DEVLINK_PORT_FLAVOUR_PCI_PF:
+ 		ida_simple_remove(&dev->port_functions.pfnum_ida, port->pfnum);
+ 		break;
++	case DEVLINK_PORT_FLAVOUR_PCI_SF:
++		ida_simple_remove(&dev->port_functions.sfnum_ida, port->sfnum);
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -169,6 +192,11 @@ nsim_dev_port_port_exists(struct nsim_dev *nsim_dev, const struct devlink_port_n
+ 		if (attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF &&
+ 		    tmp->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF && tmp->pfnum == attrs->pfnum)
+ 			return true;
++
++		if (attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_SF &&
++		    tmp->flavour == DEVLINK_PORT_FLAVOUR_PCI_SF &&
++		    tmp->sfnum == attrs->sfnum && tmp->pfnum == attrs->pfnum)
++			return true;
+ 	}
+ 	return false;
+ }
+@@ -182,19 +210,70 @@ nsim_dev_devlink_port_index_lookup(const struct nsim_dev *nsim_dev, unsigned int
+ 	list_for_each_entry(port, &nsim_dev->port_functions.head, list) {
+ 		if (port->port_index != port_index)
+ 			continue;
++		if (port->refcount > 1) {
++			NL_SET_ERR_MSG_MOD(extack, "Port is in use");
++			return ERR_PTR(-EBUSY);
++		}
+ 		return port;
+ 	}
+ 	NL_SET_ERR_MSG_MOD(extack, "User created port not found");
+ 	return ERR_PTR(-ENOENT);
+ }
+ 
++static struct nsim_port_function *
++pf_port_get(struct nsim_dev *nsim_dev, struct nsim_port_function *port)
++{
++	struct nsim_port_function *tmp;
++
++	/* PF port addition doesn't need a parent. */
++	if (port->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF)
++		return NULL;
++
++	list_for_each_entry(tmp, &nsim_dev->port_functions.head, list) {
++		if (tmp->flavour != DEVLINK_PORT_FLAVOUR_PCI_PF || tmp->pfnum != port->pfnum)
++			continue;
++
++		if (tmp->refcount + 1 == INT_MAX)
++			return ERR_PTR(-ENOSPC);
++
++		port->pf_port = tmp;
++		tmp->refcount++;
++		return tmp;
++	}
++	return ERR_PTR(-ENOENT);
++}
++
++static void pf_port_put(struct nsim_port_function *port)
++{
++	if (port->pf_port) {
++		port->pf_port->refcount--;
++		WARN_ON(port->pf_port->refcount < 0);
++	}
++	port->refcount--;
++	WARN_ON(port->refcount != 0);
++}
++
+ static int nsim_devlink_port_function_add(struct devlink *devlink, struct nsim_dev *nsim_dev,
+ 					  struct nsim_port_function *port,
+ 					  struct netlink_ext_ack *extack)
+ {
++	struct nsim_port_function *pf_port;
+ 	int err;
+ 
+-	list_add(&port->list, &nsim_dev->port_functions.head);
++	/* Keep all PF ports at the start, so that when driver is unloaded
++	 * All SF ports from the end of the list can be removed first.
++	 */
++	if (port->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF)
++		list_add(&port->list, &nsim_dev->port_functions.head);
++	else
++		list_add_tail(&port->list, &nsim_dev->port_functions.head);
++
++	pf_port = pf_port_get(nsim_dev, port);
++	if (IS_ERR(pf_port)) {
++		NL_SET_ERR_MSG_MOD(extack, "Fail to get pf port");
++		err = PTR_ERR(pf_port);
++		goto pf_err;
++	}
+ 
+ 	err = devlink_port_register(devlink, &port->dl_port, port->port_index);
+ 	if (err)
+@@ -211,6 +290,8 @@ static int nsim_devlink_port_function_add(struct devlink *devlink, struct nsim_d
+ 	devlink_port_type_clear(&port->dl_port);
+ 	devlink_port_unregister(&port->dl_port);
+ reg_err:
++	pf_port_put(port);
++pf_err:
+ 	list_del(&port->list);
+ 	return err;
+ }
+@@ -222,12 +303,14 @@ static void nsim_devlink_port_function_del(struct nsim_dev *nsim_dev,
+ 	unregister_netdev(port->netdev);
+ 	devlink_port_unregister(&port->dl_port);
+ 	list_del(&port->list);
++	pf_port_put(port);
+ }
+ 
+ static bool nsim_dev_port_flavour_supported(const struct nsim_dev *nsim_dev,
+ 					    const struct devlink_port_new_attrs *attrs)
+ {
+-	return attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF;
++	return attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF ||
++	       attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_SF;
+ }
+ 
+ int nsim_dev_devlink_port_new(struct devlink *devlink, const struct devlink_port_new_attrs *attrs,
+@@ -264,7 +347,11 @@ int nsim_dev_devlink_port_new(struct devlink *devlink, const struct devlink_port
+ 	       nsim_dev->switch_id.id_len);
+ 	port->dl_port.attrs.switch_id.id_len = nsim_dev->switch_id.id_len;
+ 
+-	devlink_port_attrs_pci_pf_set(&port->dl_port, port->controller, port->pfnum, false);
++	if (attrs->flavour == DEVLINK_PORT_FLAVOUR_PCI_PF)
++		devlink_port_attrs_pci_pf_set(&port->dl_port, port->controller, port->pfnum, false);
++	else
++		devlink_port_attrs_pci_sf_set(&port->dl_port, port->controller, port->pfnum,
++					      port->sfnum, false);
+ 
+ 	err = nsim_devlink_port_function_add(devlink, nsim_dev, port, extack);
+ 	if (err)
+@@ -331,6 +418,7 @@ void nsim_dev_port_function_disable(struct nsim_dev *nsim_dev)
+ 	 * ports.
+ 	 */
+ 
++	/* Remove SF ports first, followed by PF ports. */
+ 	list_for_each_entry_safe_reverse(port, tmp, &nsim_dev->port_functions.head, list) {
+ 		nsim_devlink_port_function_del(nsim_dev, port);
+ 		nsim_devlink_port_function_free(nsim_dev, port);
+-- 
+2.25.1
+

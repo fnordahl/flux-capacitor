@@ -1,0 +1,76 @@
+Subject: [PATCH RFC net-next v2 02/18] netdevsim: Disable VFs on nsim_dev_reload_destroy() call
+From: <dlinkin@xxxxxxxxxx>
+Date: Wed, 12 May 2021 17:48:31 +0300
+Cc: <davem@xxxxxxxxxxxxx>, <kuba@xxxxxxxxxx>, <jiri@xxxxxxxxxx>, <stephen@xxxxxxxxxxxxxxxxxx>, <dsahern@xxxxxxxxx>, <vladbu@xxxxxxxxxx>, <parav@xxxxxxxxxx>, <huyn@xxxxxxxxxx>, Dmytro Linkin <dlinkin@xxxxxxxxxx>
+In-reply-to: <1620830927-11828-1-git-send-email-dlinkin@nvidia.com>
+References: <1620830927-11828-1-git-send-email-dlinkin@nvidia.com>
+
+From: Dmytro Linkin <dlinkin@xxxxxxxxxx>
+
+Move VFs disabling from device release() to nsim_dev_reload_destroy() to
+make VFs disabling and ports removal simultaneous.
+This is a requirement for VFs ports implemented in next patches.
+
+Signed-off-by: Dmytro Linkin <dlinkin@xxxxxxxxxx>
+Reviewed-by: Jiri Pirko <jiri@xxxxxxxxxx>
+---
+ drivers/net/netdevsim/bus.c       | 5 +----
+ drivers/net/netdevsim/dev.c       | 6 ++++++
+ drivers/net/netdevsim/netdevsim.h | 1 +
+ 3 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/netdevsim/bus.c b/drivers/net/netdevsim/bus.c
+index 4bd7ef3c04be..d5c547c35e2f 100644
+--- a/drivers/net/netdevsim/bus.c
++++ b/drivers/net/netdevsim/bus.c
+@@ -37,7 +37,7 @@ static int nsim_bus_dev_vfs_enable(struct nsim_bus_dev *nsim_bus_dev,
+ 	return 0;
+ }
+ 
+-static void nsim_bus_dev_vfs_disable(struct nsim_bus_dev *nsim_bus_dev)
++void nsim_bus_dev_vfs_disable(struct nsim_bus_dev *nsim_bus_dev)
+ {
+ 	nsim_bus_dev->num_vfs = 0;
+ }
+@@ -233,9 +233,6 @@ static const struct attribute_group *nsim_bus_dev_attr_groups[] = {
+ 
+ static void nsim_bus_dev_release(struct device *dev)
+ {
+-	struct nsim_bus_dev *nsim_bus_dev = to_nsim_bus_dev(dev);
+-
+-	nsim_bus_dev_vfs_disable(nsim_bus_dev);
+ }
+ 
+ static struct device_type nsim_bus_dev_type = {
+diff --git a/drivers/net/netdevsim/dev.c b/drivers/net/netdevsim/dev.c
+index 8e52970b314e..eaa7a32bc348 100644
+--- a/drivers/net/netdevsim/dev.c
++++ b/drivers/net/netdevsim/dev.c
+@@ -1193,6 +1193,12 @@ static void nsim_dev_reload_destroy(struct nsim_dev *nsim_dev)
+ 	/* Disable and destroy any user created devlink ports */
+ 	nsim_dev_port_function_disable(nsim_dev);
+ 	debugfs_remove(nsim_dev->take_snapshot);
++
++	mutex_lock(&nsim_dev->nsim_bus_dev->vfs_lock);
++	if (nsim_dev->nsim_bus_dev->num_vfs)
++		nsim_bus_dev_vfs_disable(nsim_dev->nsim_bus_dev);
++	mutex_unlock(&nsim_dev->nsim_bus_dev->vfs_lock);
++
+ 	nsim_dev_port_del_all(nsim_dev);
+ 	nsim_dev_psample_exit(nsim_dev);
+ 	nsim_dev_health_exit(nsim_dev);
+diff --git a/drivers/net/netdevsim/netdevsim.h b/drivers/net/netdevsim/netdevsim.h
+index 7d215185860a..ff463eb5a9bd 100644
+--- a/drivers/net/netdevsim/netdevsim.h
++++ b/drivers/net/netdevsim/netdevsim.h
+@@ -287,6 +287,7 @@ ssize_t nsim_bus_dev_max_vfs_read(struct file *file,
+ ssize_t nsim_bus_dev_max_vfs_write(struct file *file,
+ 				   const char __user *data,
+ 				   size_t count, loff_t *ppos);
++void nsim_bus_dev_vfs_disable(struct nsim_bus_dev *nsim_bus_dev);
+ 
+ #if IS_ENABLED(CONFIG_XFRM_OFFLOAD)
+ void nsim_ipsec_init(struct netdevsim *ns);
+-- 
+2.25.1
+

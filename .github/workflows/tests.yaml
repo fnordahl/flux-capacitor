@@ -1,0 +1,52 @@
+name: Discovery
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    env:
+      dependencies: |
+        dkms
+      kernel_ver: 5.13
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout self
+        uses: actions/checkout@v2
+
+      - name: linux tarball
+        run: |
+          set -euxo pipefail
+          wget https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.kernel_ver }}.tar.gz
+          tar -xvf linux-${{ env.kernel_ver }}.tar.gz
+
+      - name: patch and prepare dkms sources
+        run: |
+          for f in $(ls -1 *.patch); do
+              patch -d linux-${{ env.kernel_ver }} -p1 < $f
+          done
+          sudo cp -pR linux-${{ env.kernel_ver }}/drivers/net/netdevsim /usr/src/netdevsim-${{ env.kernel_ver }}
+
+      - name: create dkms.conf
+        run: |-
+          sudo cat << EOF > /usr/src/netdevsim-${{ env.kernel_ver }}/dkms.conf
+          PACKAGE_NAME="netdevsim"
+          PACKAGE_VERSION="${{ env.kernel_ver }}"
+          BUILT_MODULE_NAME[0]="netdevsim"
+          DEST_MODULE_LOCATION[0]="/kernel/drivers/net/netdevsim/"
+          AUTOINSTALL="yes"
+          EOF
+
+      - name: dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt update
+          sudo apt -y install ${{ env.dependencies }}
+
+      - name: dkms
+        run: |
+          set -euxo pipefail
+          sudo dkms add netdevsim/${{ env.kernel_ver }}
+          sudo dkms build netdevsim/${{ env.kernel_ver }} || cat /var/lib/dkms/netdevsim/${{ env.kernel_ver }}/build/make.log && false
+          sudo dkms install netdevsim/${{ env.kernel_ver }}
