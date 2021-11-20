@@ -5,21 +5,34 @@ on:
   pull_request:
 
 jobs:
+  other:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: hello
+        run: |
+          echo "Hello, world!"
   test:
     env:
       dependencies: |
         dkms
       kernel_ver: 5.13
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ubuntu-21.10]
     steps:
       - name: checkout self
         uses: actions/checkout@v2
 
+      - name: build dependencies
+        run: |
+          set -euxo pipefail
+          sudo sed -ie 's/^# deb-src/deb-src/' /etc/apt/sources.list
+          sudo apt update
+          sudo apt -y build-dep iproute2
+
       - name: linux tarball
         run: |
           set -euxo pipefail
-          wget https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.kernel_ver }}.tar.gz
-          tar -xvf linux-${{ env.kernel_ver }}.tar.gz
+          wget -q https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.kernel_ver }}.tar.gz
+          tar -xzf linux-${{ env.kernel_ver }}.tar.gz
 
       - name: patch and prepare dkms sources
         run: |
@@ -48,5 +61,34 @@ jobs:
         run: |
           set -euxo pipefail
           sudo dkms add netdevsim/${{ env.kernel_ver }}
-          sudo dkms build netdevsim/${{ env.kernel_ver }} || cat /var/lib/dkms/netdevsim/${{ env.kernel_ver }}/build/make.log && false
+          sudo dkms build netdevsim/${{ env.kernel_ver }} \
+              || (cat /var/lib/dkms/netdevsim/${{ env.kernel_ver }}/build/make.log \
+                  && false)
           sudo dkms install netdevsim/${{ env.kernel_ver }}
+
+      - name: build iproute2
+        run: |
+          set -euxo pipefail
+          git clone \
+              https://git.kernel.org/pub/scm/network/iproute2/iproute2.git
+          cd iproute2
+          ./configure
+          make -j4
+
+      - name: devlink
+        run: |
+          set -euxo pipefail
+          DEVLINK=iproute2/devlink/devlink
+          sudo modprobe netdevsim
+          sudo sh -c 'echo "10 1" > /sys/bus/netdevsim/new_device'
+          sudo $DEVLINK port show
+          sudo $DEVLINK port add netdevsim/netdevsim10 flavour pcipf pfnum 0 || true
+          sudo $DEVLINK port add netdevsim/netdevsim10 flavour pcivf pfnum 0 || true
+          sleep 5
+          sudo $DEVLINK port show
+          sudo sh -c 'echo "11 1" > /sys/bus/netdevsim/new_device'
+          sudo $DEVLINK port add netdevsim/netdevsim11 flavour pcipf pfnum 0 || true
+          sudo $DEVLINK port add netdevsim/netdevsim11 flavour pcivf pfnum 0 || true
+          sleep 5
+          sudo $DEVLINK port show
+          sudo modprobe -r netdevsim
