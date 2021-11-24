@@ -81,14 +81,7 @@ jobs:
           DEVLINK=iproute2/devlink/devlink
           sudo modprobe netdevsim
           sudo sh -c 'echo "10 1" > /sys/bus/netdevsim/new_device'
-          sudo $DEVLINK port show
-          sudo $DEVLINK port add netdevsim/netdevsim10 flavour pcipf pfnum 0 || true
-          sudo $DEVLINK port add netdevsim/netdevsim10 flavour pcivf pfnum 0 || true
-          sleep 5
-          sudo $DEVLINK port show
-          sudo sh -c 'echo "11 1" > /sys/bus/netdevsim/new_device'
-          sudo $DEVLINK port add netdevsim/netdevsim11 flavour pcipf pfnum 0 || true
-          sudo $DEVLINK port add netdevsim/netdevsim11 flavour pcivf pfnum 0 || true
-          sleep 5
+          sudo sh -c 'echo 4 > /sys/class/net/eni10np0/device/sriov_numvfs'
+          sudo $DEVLINK dev eswitch set netdevsim/netdevsim10 mode switchdev
           sudo $DEVLINK port show
           sudo modprobe -r netdevsim
